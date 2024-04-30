@@ -1,5 +1,8 @@
 #pragma once
 
+#include <array>
+#include <cmath>
+
 #define MAYA_STL ::std::
 #define MAYA_ASSERT(...)
 

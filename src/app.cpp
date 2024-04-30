@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <fstream>
 #include "math.hpp"
+#include "transformation.hpp"
 
 #define RequireOk(ok, msg) if (!(ok)) throw std::runtime_error(msg)
 #define ShowVar(x) std::cout << #x << " = " << x << '\n'
@@ -25,7 +26,7 @@ struct Vertex
 
 static const std::vector<Vertex> s_vertices =
 {
-	{{-0.5f, -0.5f},	{1.0f, 1.0f, 0.0f}},
+	{{-0.5f, -0.5f},	{1.0f, 0.0f, 0.0f}},
 	{{0.5f, -0.5f},		{0.0f, 1.0f, 0.0f}},
 	{{0.5f, 0.5f},		{0.0f, 0.0f, 1.0f}},
 	{{-0.5f, 0.5f},		{1.0f, 1.0f, 1.0f}}
@@ -46,20 +47,28 @@ void VulkanApp::Create()
 	InitSwapchain();
 	InitImageViews();
 	InitRenderPass();
+	InitDescriptorSetLayout();
 	InitGraphicsPipeline();
 	InitFrameBuffers();
 	InitCommandPool();
 	InitSyncObjects();
-	InitCommandBuffer();
+	InitCommandBuffers();
 	InitVertexBuffer();
 	InitIndexBuffer();
+	InitUniformBuffers();
+	InitDescriptorPool();
+	InitDescriptorSets();
 }
 
 void VulkanApp::Loop()
 {
-	while (!glfwWindowShouldClose(window)) {
+	uint32_t current_frame = 0;
+
+	while (!glfwWindowShouldClose(window))
+	{
 		glfwPollEvents();
-		Render();
+		RenderFrame(current_frame);
+		current_frame = (current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
 	}
 
 	vkDeviceWaitIdle(logical_device);
@@ -67,13 +76,17 @@ void VulkanApp::Loop()
 
 void VulkanApp::Destroy()
 {
+	FreeDescriptorSets();
+	FreeDescriptorPool();
+	FreeUniformBuffers();
 	FreeIndexBuffer();
 	FreeVertexBuffer();
-	FreeCommandBuffer();
+	FreeCommandBuffers();
 	FreeSyncObjects();
 	FreeCommandPool();
 	FreeFrameBuffers();
 	FreeGraphicsPipeline();
+	FreeDescriptorSetLayout();
 	FreeRenderPass();
 	FreeImageViews();
 	FreeSwapchain();
@@ -111,7 +124,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL s_DebugMessageCallback(VkDebugUtilsMessage
 		std::cout << "\033[91m";
 	else if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
 		std::cout << "\033[93m";
-	std::cout << pCallbackData->pMessage << "\n";
+	std::cout << pCallbackData->pMessage << "\n\n";
 	std::cout << "\033[0m";
 
 	return VK_FALSE;
@@ -523,6 +536,29 @@ void VulkanApp::FreeRenderPass()
 	vkDestroyRenderPass(logical_device, render_pass, nullptr);
 }
 
+void VulkanApp::InitDescriptorSetLayout()
+{
+	VkDescriptorSetLayoutBinding binding{};
+	binding.binding = 0;
+	binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	binding.descriptorCount = 1;
+	binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+	binding.pImmutableSamplers = nullptr;
+
+	VkDescriptorSetLayoutCreateInfo ci{};
+	ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+	ci.bindingCount = 1;
+	ci.pBindings = &binding;
+
+	VkResult r = vkCreateDescriptorSetLayout(logical_device, &ci, nullptr, &descriptor_set_layout);
+	RequireOk(r == VK_SUCCESS, "Cannot create descriptor set layout.");
+}
+
+void VulkanApp::FreeDescriptorSetLayout()
+{
+	vkDestroyDescriptorSetLayout(logical_device, descriptor_set_layout, nullptr);
+}
+
 static std::vector<char> s_ReadShaderSpirV(char const* path)
 {
 	std::ifstream ifs(path, std::ios::ate | std::ios::binary);
@@ -623,7 +659,7 @@ void VulkanApp::InitGraphicsPipeline()
 	rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
 	rasterizer.lineWidth = 1.0f;
 	rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
-	rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+	rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 	rasterizer.depthBiasEnable = VK_FALSE;
 	rasterizer.depthBiasConstantFactor = 0.0f; // Optional
 	rasterizer.depthBiasClamp = 0.0f; // Optional
@@ -668,8 +704,8 @@ void VulkanApp::InitGraphicsPipeline()
 
 	VkPipelineLayoutCreateInfo pli{};
 	pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-	pli.setLayoutCount = 0; // Optional
-	pli.pSetLayouts = nullptr; // Optional
+	pli.setLayoutCount = 1;
+	pli.pSetLayouts = &descriptor_set_layout;
 	pli.pushConstantRangeCount = 0; // Optional
 	pli.pPushConstantRanges = nullptr; // Optional
 
@@ -756,44 +792,52 @@ void VulkanApp::InitSyncObjects()
 	fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 	fi.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
-	uint32_t result = vkCreateSemaphore(logical_device, &si, nullptr, &image_available_semaphore)
-		| vkCreateSemaphore(logical_device, &si, nullptr, &render_finished_semaphore)
-		| vkCreateFence(logical_device, &fi, nullptr, &in_flight_fence);
+	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+	{
+		uint32_t result = vkCreateSemaphore(logical_device, &si, nullptr, &image_available_semaphores[i])
+			| vkCreateSemaphore(logical_device, &si, nullptr, &render_finished_semaphores[i])
+			| vkCreateFence(logical_device, &fi, nullptr, &in_flight_fences[i]);
 
-	RequireOk(result == VK_SUCCESS, "Cannot create semaphore or fence.");
+		RequireOk(result == VK_SUCCESS, "Cannot create semaphore or fence.");
+	}
 }
 
 void VulkanApp::FreeSyncObjects()
 {
-	vkDestroySemaphore(logical_device, image_available_semaphore, nullptr);
-	vkDestroySemaphore(logical_device, render_finished_semaphore, nullptr);
-	vkDestroyFence(logical_device, in_flight_fence, nullptr);
+	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+	{
+		vkDestroySemaphore(logical_device, image_available_semaphores[i], nullptr);
+		vkDestroySemaphore(logical_device, render_finished_semaphores[i], nullptr);
+		vkDestroyFence(logical_device, in_flight_fences[i], nullptr);
+	}
 }
 
-void VulkanApp::InitCommandBuffer()
+void VulkanApp::InitCommandBuffers()
 {
 	VkCommandBufferAllocateInfo info{};
 	info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
 	info.commandPool = command_pool;
 	info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-	info.commandBufferCount = 1;
+	info.commandBufferCount = static_cast<uint32_t>(command_buffers.size());
 
-	VkResult result = vkAllocateCommandBuffers(logical_device, &info, &command_buffer);
+	VkResult result = vkAllocateCommandBuffers(logical_device, &info, command_buffers.data());
 	RequireOk(result == VK_SUCCESS, "Cannot create command buffer.");
 }
 
-void VulkanApp::FreeCommandBuffer()
+void VulkanApp::FreeCommandBuffers()
 {
-	vkFreeCommandBuffers(logical_device, command_pool, 1, &command_buffer);
+	vkFreeCommandBuffers(logical_device, command_pool, static_cast<uint32_t>(command_buffers.size()), command_buffers.data());
 }
 
-void VulkanApp::RecordCommandBuffer(uint32_t image_index)
+void VulkanApp::RecordCommandBuffer(uint32_t crnt, uint32_t image_index)
 {
+	auto cb = command_buffers[crnt];
+
 	VkCommandBufferBeginInfo begin{};
 	begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 	begin.flags = 0; // Optional
 	begin.pInheritanceInfo = nullptr; // Optional
-	VkResult begin_ok = vkBeginCommandBuffer(command_buffer, &begin);
+	VkResult begin_ok = vkBeginCommandBuffer(cb, &begin);
 	RequireOk(begin_ok == VK_SUCCESS, "Cannot begin command buffer.");
 
 	VkRenderPassBeginInfo rpi{};
@@ -806,9 +850,10 @@ void VulkanApp::RecordCommandBuffer(uint32_t image_index)
 	VkClearValue clear_color = { {{0.07f, 0.13f, 0.17f, 1.0f}} };
 	rpi.clearValueCount = 1;
 	rpi.pClearValues = &clear_color;
-	vkCmdBeginRenderPass(command_buffer, &rpi, VK_SUBPASS_CONTENTS_INLINE);
+	vkCmdBeginRenderPass(cb, &rpi, VK_SUBPASS_CONTENTS_INLINE);
 
-	vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphics_pipeline);
+	vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0, 1, &descriptor_sets[crnt], 0, nullptr);
+	vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, graphics_pipeline);
 
 	VkViewport viewport{};
 	viewport.x = 0.0f;
@@ -817,53 +862,55 @@ void VulkanApp::RecordCommandBuffer(uint32_t image_index)
 	viewport.height = (float)swapchain_extent.height;
 	viewport.minDepth = 0.0f;
 	viewport.maxDepth = 1.0f;
-	vkCmdSetViewport(command_buffer, 0, 1, &viewport);
+	vkCmdSetViewport(cb, 0, 1, &viewport);
 
 	VkRect2D scissor{};
 	scissor.offset = { 0, 0 };
 	scissor.extent = swapchain_extent;
-	vkCmdSetScissor(command_buffer, 0, 1, &scissor);
+	vkCmdSetScissor(cb, 0, 1, &scissor);
 
 	VkBuffer buffers[] = { vertex_buffer };
 	VkDeviceSize offsets[] = { 0 };
-	vkCmdBindVertexBuffers(command_buffer, 0, 1, buffers, offsets);
-	vkCmdBindIndexBuffer(command_buffer, index_buffer, 0, VK_INDEX_TYPE_UINT16);
+	vkCmdBindVertexBuffers(cb, 0, 1, buffers, offsets);
+	vkCmdBindIndexBuffer(cb, index_buffer, 0, VK_INDEX_TYPE_UINT16);
 
-	vkCmdDrawIndexed(command_buffer, static_cast<uint32_t>(s_indices.size()), 1, 0, 0, 0);
+	vkCmdDrawIndexed(cb, static_cast<uint32_t>(s_indices.size()), 1, 0, 0, 0);
 
-	vkCmdEndRenderPass(command_buffer);
+	vkCmdEndRenderPass(cb);
 
-	VkResult end_ok = vkEndCommandBuffer(command_buffer);
+	VkResult end_ok = vkEndCommandBuffer(cb);
 	RequireOk(end_ok == VK_SUCCESS, "Cannot record command buffer.");
 }
 
-void VulkanApp::Render()
+void VulkanApp::RenderFrame(uint32_t crnt)
 {
-	vkWaitForFences(logical_device, 1, &in_flight_fence, VK_TRUE, UINT64_MAX);
-	vkResetFences(logical_device, 1, &in_flight_fence);
+	vkWaitForFences(logical_device, 1, &in_flight_fences[crnt], VK_TRUE, UINT64_MAX);
+	vkResetFences(logical_device, 1, &in_flight_fences[crnt]);
+
+	UpdateUniformBuffer(crnt);
 
 	uint32_t index;
-	vkAcquireNextImageKHR(logical_device, swapchain, UINT64_MAX, image_available_semaphore, VK_NULL_HANDLE, &index);
-	vkResetCommandBuffer(command_buffer, 0);
-	RecordCommandBuffer(index);
+	vkAcquireNextImageKHR(logical_device, swapchain, UINT64_MAX, image_available_semaphores[crnt], VK_NULL_HANDLE, &index);
+	vkResetCommandBuffer(command_buffers[crnt], 0);
+	RecordCommandBuffer(crnt, index);
 
 	VkSubmitInfo submit_info{};
 	submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
-	VkSemaphore wait_semaphores[] = { image_available_semaphore };
+	VkSemaphore wait_semaphores[] = { image_available_semaphores[crnt]};
 	VkPipelineStageFlags wait_stages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
 	submit_info.waitSemaphoreCount = 1;
 	submit_info.pWaitSemaphores = wait_semaphores;
 	submit_info.pWaitDstStageMask = wait_stages;
 
 	submit_info.commandBufferCount = 1;
-	submit_info.pCommandBuffers = &command_buffer;
+	submit_info.pCommandBuffers = &command_buffers[crnt];
 
-	VkSemaphore signal_semaphores[] = { render_finished_semaphore };
+	VkSemaphore signal_semaphores[] = { render_finished_semaphores[crnt] };
 	submit_info.signalSemaphoreCount = 1;
 	submit_info.pSignalSemaphores = signal_semaphores;
 
-	VkResult submit_ok = vkQueueSubmit(graphics_queue.queue, 1, &submit_info, in_flight_fence);
+	VkResult submit_ok = vkQueueSubmit(graphics_queue.queue, 1, &submit_info, in_flight_fences[crnt]);
 	RequireOk(submit_ok == VK_SUCCESS, "Cannot submit draw command buffer.");
 
 	VkPresentInfoKHR present_info{};
@@ -1016,4 +1063,103 @@ void VulkanApp::FreeIndexBuffer()
 {
 	vkDestroyBuffer(logical_device, index_buffer, nullptr);
 	vkFreeMemory(logical_device, index_buffer_memory, nullptr);
+}
+
+struct UniformBufferObject
+{
+	alignas(16) maya::Fmat4 model;
+	alignas(16) maya::Fmat4 view;
+	alignas(16) maya::Fmat4 projection;
+};
+
+void VulkanApp::InitUniformBuffers()
+{
+	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+	{
+		s_CreateVulkanBuffer(physical_device, logical_device,
+			sizeof(UniformBufferObject), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			&uniform_buffers[i], &uniform_buffers_memory[i]);
+
+		vkMapMemory(logical_device, uniform_buffers_memory[i], 0, sizeof(UniformBufferObject), 0, &uniform_buffers_map[i]);
+	}
+}
+
+void VulkanApp::FreeUniformBuffers()
+{
+	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+	{
+		vkDestroyBuffer(logical_device, uniform_buffers[i], nullptr);
+		vkFreeMemory(logical_device, uniform_buffers_memory[i], nullptr);
+	}
+}
+
+void VulkanApp::UpdateUniformBuffer(uint32_t crnt)
+{
+	UniformBufferObject ubo;
+	ubo.model = maya::RotateModel(glfwGetTime(), maya::Fvec3(0, 1, 0));
+	ubo.view = maya::LookAtView(maya::Fvec3(0, 0.5f, -1), maya::Fvec3(0, -0.5, 1));
+	ubo.projection = maya::PerspectiveProjection(maya::Pi / 2.f, (float) swapchain_extent.width / swapchain_extent.height, 0.1f, 100.0f);
+	ubo.projection[1][1] *= -1;
+
+	std::memcpy(uniform_buffers_map[crnt], &ubo, sizeof(UniformBufferObject));
+}
+
+void VulkanApp::InitDescriptorPool()
+{
+	VkDescriptorPoolSize size{};
+	size.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+	size.descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+
+	VkDescriptorPoolCreateInfo ci{};
+	ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+	ci.poolSizeCount = 1;
+	ci.pPoolSizes = &size;
+	ci.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+
+	VkResult r = vkCreateDescriptorPool(logical_device, &ci, nullptr, &descriptor_pool);
+	RequireOk(r == VK_SUCCESS, "Cannot create descriptor pool.");
+}
+
+void VulkanApp::FreeDescriptorPool()
+{
+	vkDestroyDescriptorPool(logical_device, descriptor_pool, nullptr);
+}
+
+void VulkanApp::InitDescriptorSets()
+{
+	PER_FRAMES(VkDescriptorSetLayout) layouts;
+	std::fill(layouts.begin(), layouts.end(), descriptor_set_layout);
+
+	VkDescriptorSetAllocateInfo ci{};
+	ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+	ci.descriptorPool = descriptor_pool;
+	ci.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+	ci.pSetLayouts = layouts.data();
+
+	VkResult r = vkAllocateDescriptorSets(logical_device, &ci, descriptor_sets.data());
+	RequireOk(r == VK_SUCCESS, "Cannot allocate descriptor sets.");
+
+	for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+	{
+		VkDescriptorBufferInfo bi{};
+		bi.buffer = uniform_buffers[i];
+		bi.offset = 0;
+		bi.range = sizeof(UniformBufferObject);
+
+		VkWriteDescriptorSet write{};
+		write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		write.dstSet = descriptor_sets[i];
+		write.dstBinding = 0;
+		write.dstArrayElement = 0;
+		write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		write.descriptorCount = 1;
+		write.pBufferInfo = &bi;
+
+		vkUpdateDescriptorSets(logical_device, 1, &write, 0, nullptr);
+	}
+}
+
+void VulkanApp::FreeDescriptorSets()
+{
+	vkFreeDescriptorSets(logical_device, descriptor_pool, static_cast<uint32_t>(descriptor_sets.size()), descriptor_sets.data());
 }

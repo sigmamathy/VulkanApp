@@ -4,6 +4,7 @@
 #include <GLFW/glfw3.h>
 #include <optional>
 #include <vector>
+#include <array>
 
 class VulkanApp
 {
@@ -38,20 +39,30 @@ private:
 	QueueFamily present_queue;
 
 	VkRenderPass render_pass;
+	VkDescriptorSetLayout descriptor_set_layout;
 	VkPipelineLayout pipeline_layout;
 	VkPipeline graphics_pipeline;
 
-	VkCommandPool command_pool;
-	VkCommandBuffer command_buffer;
+	static constexpr size_t MAX_FRAMES_IN_FLIGHT = 2;
+#define PER_FRAMES(t) std::array<t, MAX_FRAMES_IN_FLIGHT>
 
-	VkSemaphore image_available_semaphore;
-	VkSemaphore render_finished_semaphore;
-	VkFence in_flight_fence;
+	VkCommandPool command_pool;
+	PER_FRAMES(VkCommandBuffer) command_buffers;
+	PER_FRAMES(VkSemaphore) image_available_semaphores;
+	PER_FRAMES(VkSemaphore) render_finished_semaphores;
+	PER_FRAMES(VkFence) in_flight_fences;
 
 	VkBuffer vertex_buffer;
 	VkDeviceMemory vertex_buffer_memory;
 	VkBuffer index_buffer;
 	VkDeviceMemory index_buffer_memory;
+
+	PER_FRAMES(VkBuffer) uniform_buffers;
+	PER_FRAMES(VkDeviceMemory) uniform_buffers_memory;
+	PER_FRAMES(void*) uniform_buffers_map;
+
+	VkDescriptorPool descriptor_pool;
+	PER_FRAMES(VkDescriptorSet) descriptor_sets;
 
 private:
 
@@ -65,27 +76,41 @@ private:
 	void FreeSurface();
 	void InitDevice();
 	void FreeDevice();
+
 	void InitSwapchain();
 	void FreeSwapchain();
 	void InitImageViews();
 	void FreeImageViews();
+
 	void InitRenderPass();
 	void FreeRenderPass();
+	void InitDescriptorSetLayout();
+	void FreeDescriptorSetLayout();
 	void InitGraphicsPipeline();
 	void FreeGraphicsPipeline();
 	void InitFrameBuffers();
 	void FreeFrameBuffers();
+
 	void InitCommandPool();
 	void FreeCommandPool();
-	void InitCommandBuffer();
-	void FreeCommandBuffer();
+	void InitCommandBuffers();
+	void FreeCommandBuffers();
 	void InitSyncObjects();
 	void FreeSyncObjects();
+
 	void InitVertexBuffer();
 	void FreeVertexBuffer();
 	void InitIndexBuffer();
 	void FreeIndexBuffer();
+	void InitUniformBuffers();
+	void FreeUniformBuffers();
 
-	void RecordCommandBuffer(uint32_t imageIndex);
-	void Render();
+	void InitDescriptorPool();
+	void FreeDescriptorPool();
+	void InitDescriptorSets();
+	void FreeDescriptorSets();
+
+	void RecordCommandBuffer(uint32_t crnt, uint32_t imageIndex);
+	void RenderFrame(uint32_t crnt);
+	void UpdateUniformBuffer(uint32_t crnt);
 };

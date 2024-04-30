@@ -5,7 +5,7 @@ project(JustTest)
 set(CMAKE_TOOLCHAIN_FILE "C:/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE FILEPATH "vcpkg toolchain file")
 find_package(glfw3 CONFIG REQUIRED)
 
-add_executable(${PROJECT_NAME} "src/main.cpp" "src/app.cpp")
+add_executable(${PROJECT_NAME} "src/main.cpp" "src/app.cpp" "src/transformation.cpp")
 
 target_include_directories(${PROJECT_NAME} PUBLIC $ENV{VULKAN_SDK}/Include)
 target_link_directories(${PROJECT_NAME} PUBLIC $ENV{VULKAN_SDK}/Lib)
