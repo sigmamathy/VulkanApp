@@ -25,7 +25,7 @@ private:
 	VkDevice logical_device;
 
 	VkSwapchainKHR swapchain;
-	std::vector<VkImageView> image_views;
+	std::vector<VkImageView> swapchain_image_views;
 	VkFormat swapchain_image_format;
 	VkExtent2D swapchain_extent;
 	std::vector<VkFramebuffer> swapchain_framebuffers;
@@ -63,6 +63,11 @@ private:
 
 	VkDescriptorPool descriptor_pool;
 	PER_FRAMES(VkDescriptorSet) descriptor_sets;
+
+	VkImage texture_image;
+	VkDeviceMemory texture_image_memory;
+	VkImageView texture_image_view;
+	VkSampler texture_sampler;
 
 private:
 
@@ -104,6 +109,13 @@ private:
 	void FreeIndexBuffer();
 	void InitUniformBuffers();
 	void FreeUniformBuffers();
+
+	void InitTextureImage();
+	void FreeTextureImage();
+	void InitTextureImageView();
+	void FreeTextureImageView();
+	void InitTextureSampler();
+	void FreeTextureSampler();
 
 	void InitDescriptorPool();
 	void FreeDescriptorPool();
