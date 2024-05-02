@@ -105,13 +105,22 @@ void VulkanApp::Destroy()
 	FreeWindow();
 }
 
+static void s_FramebufferResizeCallback(GLFWwindow* window, int width, int height)
+{
+	bool& is_framebuffer_resized = *reinterpret_cast<bool*>(glfwGetWindowUserPointer(window));
+	is_framebuffer_resized = true;
+}
+
 void VulkanApp::InitWindow()
 {
 	glfwInit();
 	glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-	glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+	//glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 	window = glfwCreateWindow(1600, 900, "Vulkan Example", 0, 0);
 	RequireOk(window, "Cannot create window.");
+	is_framebuffer_resized = false;
+	glfwSetWindowUserPointer(window, &is_framebuffer_resized);
+	glfwSetFramebufferSizeCallback(window, s_FramebufferResizeCallback);
 }
 
 void VulkanApp::FreeWindow()
@@ -695,7 +704,7 @@ void VulkanApp::InitGraphicsPipeline()
 	rasterizer.rasterizerDiscardEnable = VK_FALSE;
 	rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
 	rasterizer.lineWidth = 1.0f;
-	rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+	rasterizer.cullMode = VK_CULL_MODE_NONE;
 	rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 	rasterizer.depthBiasEnable = VK_FALSE;
 	rasterizer.depthBiasConstantFactor = 0.0f; // Optional
@@ -919,15 +928,44 @@ void VulkanApp::RecordCommandBuffer(uint32_t crnt, uint32_t image_index)
 	RequireOk(end_ok == VK_SUCCESS, "Cannot record command buffer.");
 }
 
+void VulkanApp::UpdateSwapchain()
+{
+	int width, height;
+	glfwGetFramebufferSize(window, &width, &height);
+	while (width == 0 || height == 0) {
+		glfwGetFramebufferSize(window, &width, &height);
+		glfwWaitEvents();
+	}
+
+	vkDeviceWaitIdle(logical_device);
+
+	FreeFrameBuffers();
+	FreeImageViews();
+	FreeSwapchain();
+
+	InitSwapchain();
+	InitImageViews();
+	InitFrameBuffers();
+}
+
 void VulkanApp::RenderFrame(uint32_t crnt)
 {
+	uint32_t index;
 	vkWaitForFences(logical_device, 1, &in_flight_fences[crnt], VK_TRUE, UINT64_MAX);
+
+	VkResult result = vkAcquireNextImageKHR(logical_device, swapchain, UINT64_MAX, image_available_semaphores[crnt], VK_NULL_HANDLE, &index);
+
+	if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+		UpdateSwapchain();
+		return;
+	}
+	
+	RequireOk(result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR, "Cannot acquire swapchain image.");
+
 	vkResetFences(logical_device, 1, &in_flight_fences[crnt]);
 
 	UpdateUniformBuffer(crnt);
 
-	uint32_t index;
-	vkAcquireNextImageKHR(logical_device, swapchain, UINT64_MAX, image_available_semaphores[crnt], VK_NULL_HANDLE, &index);
 	vkResetCommandBuffer(command_buffers[crnt], 0);
 	RecordCommandBuffer(crnt, index);
 
@@ -960,7 +998,15 @@ void VulkanApp::RenderFrame(uint32_t crnt)
 	present_info.pSwapchains = swapchains;
 	present_info.pImageIndices = &index;
 
-	vkQueuePresentKHR(present_queue.queue, &present_info);
+	result = vkQueuePresentKHR(present_queue.queue, &present_info);
+
+	if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || is_framebuffer_resized) {
+		UpdateSwapchain();
+		is_framebuffer_resized = false;
+		return;
+	}
+
+	RequireOk(result == VK_SUCCESS, "Cannot present swapchain image.");
 }
 
 static uint32_t s_FindMemoryTypeIndex(VkPhysicalDevice pd, uint32_t filter, VkMemoryPropertyFlags flags)
@@ -1145,7 +1191,7 @@ void VulkanApp::FreeUniformBuffers()
 void VulkanApp::UpdateUniformBuffer(uint32_t crnt)
 {
 	UniformBufferObject ubo;
-	ubo.model = maya::RotateModel(static_cast<float>(glfwGetTime()), maya::Fvec3(0, 1, 0));
+	ubo.model = maya::RotateModel(static_cast<float>(glfwGetTime()) * 3.f, maya::Fvec3(0, 1, 0));
 	ubo.view = maya::LookAtView(maya::Fvec3(0, 0.5f, -1), maya::Fvec3(0, -0.5, 1));
 	ubo.projection = maya::PerspectiveProjection(static_cast<float>(maya::Pi) / 2.f, (float) swapchain_extent.width / swapchain_extent.height, 0.1f, 100.0f);
 	ubo.projection[1][1] *= -1;

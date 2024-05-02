@@ -17,6 +17,7 @@ public:
 private:
 
 	GLFWwindow* window;
+	bool is_framebuffer_resized;
 	VkInstance instance;
 	VkDebugUtilsMessengerEXT debug_messenger;
 	VkSurfaceKHR surface;
@@ -125,4 +126,5 @@ private:
 	void RecordCommandBuffer(uint32_t crnt, uint32_t imageIndex);
 	void RenderFrame(uint32_t crnt);
 	void UpdateUniformBuffer(uint32_t crnt);
+	void UpdateSwapchain();
 };
